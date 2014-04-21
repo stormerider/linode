@@ -31,13 +31,19 @@ try:
     from json import load
     from urllib.parse import urlencode
     from urllib.request import urlretrieve
-    import ConfigParser
+    import configparser
+    import os
 except Exception as excp:
     exit("Couldn't import the standard library. Are you running Python 3?")
 
 def execute(action, parameters):
+    global API, KEY
+
+    api = API.format(KEY)
+    if DEBUG:
+        print("--> API = ", api)
     # Execute a query and return a Python dictionary.
-    uri = "{0}&action={1}".format(API.format(KEY), action)
+    uri = "{0}&action={1}".format(api, action)
     if parameters and len(parameters) > 0:
         uri = "{0}&{1}".format(uri, urlencode(parameters))
     if DEBUG:
@@ -51,13 +57,15 @@ def execute(action, parameters):
     json = load(open(file), encoding="utf-8")
     if len(json["ERRORARRAY"]) > 0:
         err = json["ERRORARRAY"][0]
-        raise Exception("Error {0}: {1}".format(int(err["ERRORCODE"]),
+        raise Exception("API Error {0}: {1}".format(int(err["ERRORCODE"]),
             err["ERRORMESSAGE"]))
-    return load(open(file), encoding="utf-8")
+    return json
 
 def ip():
+    global GETIP
+
     if DEBUG:
-        print("-->", GETIP)
+        print("--> ip: ", GETIP)
     file, headers = urlretrieve(GETIP)
     if DEBUG:
         print("<--", file)
@@ -67,28 +75,35 @@ def ip():
     return open(file).read().strip()
 
 def configure_this():
-    conf = ConfigParser.ConfigParser()
+    conf = configparser.ConfigParser()
     conf.read(['/etc/linode/linode.conf', os.path.expanduser('./linode.conf')])
     return (conf)
 
 def main():
+    global API, KEY, RESOURCE, DOMAINID, GETIP
+
     conf = configure_this()
     general = conf['general']
 
+    DOMAINID = general.get('domainid')
     RESOURCE = general.get('resource')
+    GETIP = general.get('getip', 'http://hosted.jedsmith.org/ip.php')
     KEY = general.get('key')
-    GETIP = general.get('resource', 'http://hosted.jedsmith.org/ip.php')
-    API = general.get('api', 'https://api.linode.com/api/?api_key={0}&resultFormat=JSON')
+    API = general.get('api', "https://api.linode.com/api/?api_key={0}&resultFormat=JSON")
 
     if RESOURCE == '000000':
         print("You must customize the values in linode.conf")
         return -1
 
     try:
-        res = execute("domainResourceGet", {"ResourceID": RESOURCE})["DATA"]
+        res = execute("domainResourceGet", {"ResourceID": RESOURCE, "DomainID": DOMAINID})["DATA"][0]
         if(len(res)) == 0:
             raise Exception("No such resource?".format(RESOURCE))
         public = ip()
+        if DEBUG:
+            print("New Public IP:", public)
+            print("Old Public IP:", res["TARGET"])
+
         if res["TARGET"] != public:
             old = res["TARGET"]
             request = {
@@ -103,11 +118,12 @@ def main():
             print("OK {0} -> {1}".format(old, public))
             return 1
         else:
-            print("OK")
+            print("OK - no update needed")
             return 0
     except Exception as excp:
         print("FAIL {0}: {1}".format(type(excp).__name__, excp))
         return 2
 
 if __name__ == "__main__":
+    global API, KEY, RESOURCE, DOMAINID, GETIP
     exit(main())
